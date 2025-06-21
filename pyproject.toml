@@ -16,6 +16,9 @@ opencv-python = "4.11.0.86"
 scikit-learn = "1.7.0"
 sentence-transformers = "4.1.0"
 transformers = "4.52.4"
+fastapi = "^0.115.13"
+uvicorn = "^0.34.3"
+python-multipart = "^0.0.20"
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.3.0"
