@@ -19,20 +19,47 @@ class AIService:
         
         # Use the better performing model
         self.model_name = "haywoodsloan/ai-image-detector-deploy"
-        self.api_url = f"https://api-inference.huggingface.co/models/{self.model_name}"
-        self.api_token = os.getenv("HUGGINGFACE_TOKEN")
         
         # Simplified thresholds for better detection
         self.deepfake_threshold = 0.85  # Much higher threshold since model is too aggressive
         self.ai_generated_threshold = 0.80  # Higher threshold for AI detection
         
-        # Use the pipeline for inference
+        # Use the pipeline for inference with safe optimizations
         device = 0 if torch.cuda.is_available() else -1  # Use GPU if available
-        self.pipe = pipeline("image-classification", model=self.model_name, device=device)
+        print(f"🚀 Loading local model: {self.model_name} on device {device}")
+        
+        # Safe optimizations that won't crash your system
+        self.pipe = pipeline(
+            "image-classification", 
+            model=self.model_name, 
+            device=device,
+            model_kwargs={"low_cpu_mem_usage": True}  # Safe memory optimization
+        )
+        
+        # Warm up the model with a dummy inference
+        print("🔥 Warming up model...")
+        dummy_image = Image.new('RGB', (224, 224), color='white')
+        _ = self.pipe(dummy_image)
+        print("✅ Model ready!")
     
     def detect_deepfake_image(self, image: Image.Image) -> Dict[str, Any]:
         try:
-            result = self.pipe(image)
+            total_start = time.time()
+            
+            # Time image preprocessing
+            preprocess_start = time.time()
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+            image_resized = image.resize((224, 224), Image.Resampling.LANCZOS)
+            preprocess_time = time.time() - preprocess_start
+            
+            # Time model inference
+            inference_start = time.time()
+            result = self.pipe(image_resized)
+            inference_time = time.time() - inference_start
+            
+            # Time result processing
+            processing_start = time.time()
             
             # Handle pipeline result safely
             if isinstance(result, list):
@@ -54,7 +81,7 @@ class AIService:
                     "debug_info": {"pipeline_result": str(result)}
                 }
 
-            # Aggregate scores for each label robustly
+            # Aggregate scores for each label
             label_scores = {}
             for pred in predictions:
                 if isinstance(pred, dict):
@@ -66,7 +93,6 @@ class AIService:
             if label_scores:
                 predicted_label = max(label_scores.keys(), key=lambda k: label_scores[k])
                 confidence_score = label_scores[predicted_label]
-                # For this model, 'artificial' means fake, 'real' means authentic
                 predicted_is_fake = predicted_label == 'artificial'
             else:
                 predicted_label = 'unknown'
@@ -97,22 +123,38 @@ class AIService:
             elif confidence_score > 0.9:
                 analysis += " - Very high confidence"
 
-            model_note = "This model detects AI-generated images with 97.9% accuracy using SwinV2 architecture (pipeline inference)."
+            processing_time = time.time() - processing_start
+            total_time = time.time() - total_start
+            
+            # Print timing breakdown
+            print(f"⏱️  Timing breakdown:")
+            print(f"   Preprocessing: {preprocess_time:.3f}s")
+            print(f"   Model inference: {inference_time:.3f}s")
+            print(f"   Result processing: {processing_time:.3f}s")
+            print(f"   Total time: {total_time:.3f}s")
+
+            model_note = "This model detects AI-generated images with 97.9% accuracy using local SwinV2 architecture."
 
             return {
                 "is_deepfake": is_deepfake,
                 "confidence": confidence_score,
+                "processing_time": total_time,
                 "model_used": self.model_name,
                 "predicted_label": predicted_label,
                 "detection_type": detection_type,
                 "analysis": analysis,
                 "model_note": model_note,
                 "debug_info": {
-                    "pipeline_result": result,
                     "label_scores": label_scores,
                     "thresholds_used": {
                         "deepfake_threshold": self.deepfake_threshold,
                         "ai_generated_threshold": self.ai_generated_threshold
+                    },
+                    "timing_breakdown": {
+                        "preprocessing_ms": preprocess_time * 1000,
+                        "inference_ms": inference_time * 1000,
+                        "processing_ms": processing_time * 1000,
+                        "total_ms": total_time * 1000
                     }
                 }
             }
@@ -120,6 +162,7 @@ class AIService:
             return {
                 "is_deepfake": False,
                 "confidence": 0.0,
+                "processing_time": 0.0,
                 "model_used": self.model_name,
                 "predicted_label": "",
                 "detection_type": "error",

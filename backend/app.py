@@ -124,7 +124,7 @@ async def upload_file(
             model_note=detection_result.get("model_note", "")
         )
         
-        detection_results[detection_id] = result.dict()
+        detection_results[detection_id] = result.model_dump()
         
         return result
         
@@ -230,7 +230,7 @@ async def detect_with_model(
             model_note=detection_result.get("model_note", "")
         )
         
-        detection_results[detection_id] = result.dict()
+        detection_results[detection_id] = result.model_dump()
         return result
         
     except Exception as e:
