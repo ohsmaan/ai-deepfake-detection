@@ -5,6 +5,13 @@ from pydantic import BaseModel
 import uvicorn
 from typing import Optional, List
 import time
+import os
+import aiofiles
+from PIL import Image
+from services.ai_service import AIService
+
+# Initialize AI service
+ai_service = AIService()
 
 # Pydantic models for request/response
 class DetectionRequest(BaseModel):
@@ -15,6 +22,8 @@ class DetectionResponse(BaseModel):
     confidence: float
     processing_time: float
     message: str
+    model_used: str
+    claude_analysis: str
 
 # FastAPI app configuration
 app = FastAPI(
@@ -67,27 +76,53 @@ async def upload_file(
     # Generate unique ID for this detection
     detection_id = f"detection_{int(time.time())}"
     
-    # Simulate AI processing (replace with actual model)
-    start_time = time.time()
+    # Save uploaded file temporarily
+    temp_file_path = f"/tmp/{detection_id}_{file.filename}"
     
-    # TODO: Add actual deepfake detection logic here
-    # For now, return mock results
-    is_deepfake = False  # Mock result
-    confidence = 0.85    # Mock confidence
+    try:
+        # Save file
+        async with aiofiles.open(temp_file_path, 'wb') as f:
+            content = await file.read()
+            await f.write(content)
+        
+        # Start AI processing
+        start_time = time.time()
+        
+        # Detect deepfake based on file type
+        if file.content_type.startswith("video/"):
+            detection_result = ai_service.detect_deepfake_video(temp_file_path)
+        else:
+            # For images, convert to PIL Image
+            image = Image.open(temp_file_path)
+            detection_result = ai_service.detect_deepfake_image(image)
+        
+        processing_time = time.time() - start_time
+        
+        # Get Claude analysis
+        file_info = f"Filename: {file.filename}, Size: {file.size} bytes, Type: {file.content_type}"
+        claude_analysis = await ai_service.analyze_with_claude(detection_result, file_info)
+        
+        # Create response
+        result = DetectionResponse(
+            is_deepfake=detection_result.get("is_deepfake", False),
+            confidence=detection_result.get("confidence", 0.0),
+            processing_time=processing_time,
+            message=f"Analysis complete for {file.filename}",
+            model_used=detection_result.get("model_used", "unknown"),
+            claude_analysis=claude_analysis
+        )
+        
+        detection_results[detection_id] = result.dict()
+        
+        return result
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
     
-    processing_time = time.time() - start_time
-    
-    # Store result
-    result = DetectionResponse(
-        is_deepfake=is_deepfake,
-        confidence=confidence,
-        processing_time=processing_time,
-        message=f"Analysis complete for {file.filename}"
-    )
-    
-    detection_results[detection_id] = result.dict()
-    
-    return result
+    finally:
+        # Clean up temporary file
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
 
 @app.get("/results/{detection_id}")
 def get_result(detection_id: str):
@@ -96,6 +131,16 @@ def get_result(detection_id: str):
         raise HTTPException(status_code=404, detail="Detection not found")
     
     return detection_results[detection_id]
+
+@app.get("/models")
+def get_model_info():
+    """Get information about available AI models"""
+    return ai_service.get_model_info()
+
+@app.get("/hf-models")
+def get_hf_models():
+    """Get information about Hugging Face models"""
+    return ai_service.hf_api.get_available_models()
 
 @app.get("/stats")
 def get_stats():
@@ -113,6 +158,66 @@ async def batch_upload(files: List[UploadFile] = File(...)):
 @app.get("/status/{detection_id}")
 async def get_processing_status(detection_id: str):
     """Get real-time processing status"""
+
+@app.post("/detect/{model_name}")
+async def detect_with_model(
+    model_name: str,
+    file: UploadFile = File(...)
+):
+    """Detect deepfake using a specific model"""
+    
+    # Validate file type
+    allowed_types = ["video/", "image/"]
+    if not file.content_type or not any(file.content_type.startswith(t) for t in allowed_types):
+        raise HTTPException(
+            status_code=400, 
+            detail="File must be a video or image"
+        )
+    
+    # Generate unique ID
+    detection_id = f"detection_{int(time.time())}"
+    temp_file_path = f"/tmp/{detection_id}_{file.filename}"
+    
+    try:
+        # Save file
+        async with aiofiles.open(temp_file_path, 'wb') as f:
+            content = await file.read()
+            await f.write(content)
+        
+        start_time = time.time()
+        
+        # Use specific model for detection
+        if file.content_type.startswith("video/"):
+            detection_result = ai_service.detect_deepfake_video(temp_file_path)
+        else:
+            image = Image.open(temp_file_path)
+            # Use Hugging Face API with specific model
+            detection_result = ai_service.hf_api.detect_deepfake_api(image, model_name)
+        
+        processing_time = time.time() - start_time
+        
+        # Get Claude analysis
+        file_info = f"Filename: {file.filename}, Model: {model_name}"
+        claude_analysis = await ai_service.analyze_with_claude(detection_result, file_info)
+        
+        result = DetectionResponse(
+            is_deepfake=detection_result.get("is_deepfake", False),
+            confidence=detection_result.get("confidence", 0.0),
+            processing_time=processing_time,
+            message=f"Analysis complete using {model_name}",
+            model_used=detection_result.get("model_used", model_name),
+            claude_analysis=claude_analysis
+        )
+        
+        detection_results[detection_id] = result.dict()
+        return result
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+    
+    finally:
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
 
 # Error handler
 @app.exception_handler(HTTPException)
