@@ -4,6 +4,7 @@ class DeepfakeDetectorContent {
         this.apiUrl = 'http://localhost:8001';
         this.filterMode = false; // Toggle for AI content filtering
         this.scannedElements = new Set(); // Track already scanned elements
+        this.scannedTexts = new Set(); // Track already scanned text content
         this.removeContent = false; // New setting for removing content
         this.init();
     }
@@ -16,14 +17,19 @@ class DeepfakeDetectorContent {
     }
 
     async loadSettings() {
-        const result = await chrome.storage.sync.get(['autoScan', 'filterMode', 'showOverlay', 'removeContent']);
-        this.settings = {
-            autoScan: result.autoScan !== false,
-            filterMode: result.filterMode !== false,
-            showOverlay: result.showOverlay !== false,
-            removeContent: result.removeContent || false  // New setting for removing content
-        };
-        console.log('🔧 Loaded settings:', this.settings);
+        chrome.storage.sync.get({
+            filterMode: false,
+            removeContent: false,
+            textDetection: true,
+            textConfidenceThreshold: 0.7,
+            continuousScanning: true,
+            scanInterval: 5000
+        }, (settings) => {
+            this.settings = settings;
+            this.filterMode = settings.filterMode;
+            this.removeContent = settings.removeContent;
+            console.log('🔧 Loaded settings:', settings);
+        });
     }
 
     setupContentFilter() {
@@ -142,8 +148,9 @@ class DeepfakeDetectorContent {
             this.observer.disconnect();
         }
         
-        // Create a more aggressive observer for Twitter
+        // Create a more aggressive observer for Twitter and Google Images
         const isTwitter = window.location.hostname.includes('twitter.com') || window.location.hostname.includes('x.com');
+        const isGoogleImages = window.location.hostname.includes('google.com') && window.location.pathname.includes('/search') && window.location.search.includes('tbm=isch');
         
         this.observer = new MutationObserver((mutations) => {
             mutations.forEach((mutation) => {
@@ -151,8 +158,8 @@ class DeepfakeDetectorContent {
                     if (node.nodeType === Node.ELEMENT_NODE) {
                         this.scanNewContent(node);
                         
-                        // For Twitter, also scan the entire document periodically
-                        if (isTwitter) {
+                        // For Twitter and Google Images, also scan the entire document periodically
+                        if (isTwitter || isGoogleImages) {
                             setTimeout(() => {
                                 this.scanExistingContent();
                             }, 1000);
@@ -171,9 +178,9 @@ class DeepfakeDetectorContent {
         
         this.observer.observe(document.body, observerOptions);
         
-        // For Twitter, also set up periodic scanning
-        if (isTwitter) {
-            this.twitterScanInterval = setInterval(() => {
+        // For Twitter and Google Images, also set up periodic scanning
+        if (isTwitter || isGoogleImages) {
+            this.periodicScanInterval = setInterval(() => {
                 this.scanExistingContent();
             }, 3000); // Scan every 3 seconds
         }
@@ -188,9 +195,9 @@ class DeepfakeDetectorContent {
         }
         
         // Clear Twitter scan interval
-        if (this.twitterScanInterval) {
-            clearInterval(this.twitterScanInterval);
-            this.twitterScanInterval = null;
+        if (this.periodicScanInterval) {
+            clearInterval(this.periodicScanInterval);
+            this.periodicScanInterval = null;
         }
         
         console.log('🔍 Content monitoring stopped');
@@ -207,18 +214,45 @@ class DeepfakeDetectorContent {
         // If the node itself is an image or video
         if (node.tagName === 'IMG') this.scanImage(node);
         if (node.tagName === 'VIDEO') this.scanVideo(node);
+        
+        // Check for new images, videos, and text
+        if (node.querySelectorAll) {
+            const images = node.querySelectorAll('img');
+            const videos = node.querySelectorAll('video');
+            // const textElements = node.querySelectorAll('p, div, span, article');  // DISABLED - No automatic text scanning
+            
+            images.forEach(img => {
+                if (this.isValidImage(img)) {
+                    this.scanImage(img);
+                }
+            });
+            
+            videos.forEach(video => {
+                if (this.isValidVideo(video)) {
+                    this.scanVideo(video);
+                }
+            });
+            
+            // DISABLED - Automatic text scanning removed
+            // textElements.forEach(element => {
+            //     if (this.isValidTextElement(element)) {
+            //         this.scanTextElement(element);
+            //     }
+            // });
+        }
     }
 
     scanExistingContent() {
-        console.log('🔍 Scanning existing content...');
-        
-        const images = document.querySelectorAll('img');
-        const videos = document.querySelectorAll('video');
-        
-        console.log(`Found ${images.length} images and ${videos.length} videos to scan`);
-        
-        images.forEach(img => this.scanImage(img));
-        videos.forEach(video => this.scanVideo(video));
+        // Check if we're on Google Images and use specific scanning
+        if (window.location.hostname.includes('google.com') && window.location.pathname.includes('/search') && window.location.search.includes('tbm=isch')) {
+            this.scanGoogleImages();
+        } else {
+            // Scan all existing images and videos
+            this.scanImages();
+            this.scanVideos();
+            this.scanAudio();
+            // this.scanTexts();  // DISABLED - No automatic text scanning
+        }
     }
 
     async scanImage(img) {
@@ -404,6 +438,9 @@ class DeepfakeDetectorContent {
         } else if (hostname.includes('twitter.com') || hostname.includes('x.com')) {
             // For Twitter, remove the entire post/tweet
             this.removeTwitterPost(element);
+        } else if (hostname.includes('google.com')) {
+            // For Google Images, remove the image card
+            this.removeGoogleImageCard(element);
         } else {
             // For other sites, just remove the element
             element.remove();
@@ -525,6 +562,93 @@ class DeepfakeDetectorContent {
         } else {
             element.remove();
             console.log(`🗑️ Removed individual Twitter element (no container found)`);
+        }
+    }
+
+    removeGoogleImageCard(element) {
+        console.log(`🔍 Attempting to remove Google Image card`);
+        
+        // Look for Google Images-specific containers
+        const googleImageSelectors = [
+            '.isv-r', // Google Images result container
+            '.isv-r.PNCib.MSM1fd.BUooTd', // Main image result container
+            '[data-ved]', // Elements with data-ved attribute (Google Images specific)
+            '.rg_i', // Image container class
+            '.isv-r.PNCib', // Another common container pattern
+            '[jsname="sTFXNd"]', // Google Images specific selector
+            '.islrc > div', // Direct children of image results container
+            '.islrc .isv-r', // Image results within islrc
+            '[data-ri]', // Elements with data-ri attribute
+            '.rg_bx', // Image box container
+            '.rg_ic', // Image container
+            '.rg_meta', // Image metadata container
+            '.rg_di', // Image display container
+        ];
+        
+        let container = null;
+        
+        // Try to find the Google Images container
+        for (const selector of googleImageSelectors) {
+            container = element.closest(selector);
+            if (container) {
+                console.log(`🔍 Found Google Images container: ${selector}`);
+                break;
+            }
+        }
+        
+        // If no specific container found, try to find a reasonable parent
+        if (!container) {
+            // Look for common Google Images parent patterns
+            let current = element;
+            for (let i = 0; i < 8; i++) { // Go up 8 levels max for Google Images
+                current = current.parentElement;
+                if (!current) break;
+                
+                // Check if this looks like a Google Images container
+                if (current.classList.contains('isv-r') ||
+                    current.classList.contains('rg_i') ||
+                    current.classList.contains('rg_bx') ||
+                    current.classList.contains('rg_ic') ||
+                    current.classList.contains('rg_di') ||
+                    current.getAttribute('data-ved') ||
+                    current.getAttribute('data-ri') ||
+                    current.getAttribute('jsname') === 'sTFXNd' ||
+                    current.querySelector('.rg_i') ||
+                    current.querySelector('[data-ved]') ||
+                    current.querySelector('.rg_meta')) {
+                    container = current;
+                    console.log(`🔍 Found Google Images container by pattern: ${current.tagName} ${current.className}`);
+                    break;
+                }
+            }
+        }
+        
+        // Additional fallback: look for the closest div that contains this image and has a reasonable size
+        if (!container) {
+            let current = element;
+            for (let i = 0; i < 6; i++) {
+                current = current.parentElement;
+                if (!current) break;
+                
+                // Check if this element looks like it could be an image card
+                const rect = current.getBoundingClientRect();
+                if (rect.width > 100 && rect.height > 100 && 
+                    (current.tagName === 'DIV' || current.tagName === 'FIGURE') &&
+                    current.querySelector('img') === element) {
+                    container = current;
+                    console.log(`🔍 Found Google Images container by size/position: ${current.tagName} ${rect.width}x${rect.height}`);
+                    break;
+                }
+            }
+        }
+        
+        // Remove the container if found, otherwise just remove the element
+        if (container) {
+            container.remove();
+            console.log(`🗑️ Removed Google Images card container`);
+        } else {
+            element.remove();
+            console.log(`🗑️ Removed individual Google Images element (no container found)`);
         }
     }
 
@@ -717,92 +841,303 @@ class DeepfakeDetectorContent {
             } else if (request.action === 'updateFilterMode') {
                 this.updateFilterMode(request.filterMode);
                 sendResponse({ success: true });
+            } else if (request.action === 'updateTextDetection') {
+                this.settings.textDetection = request.textDetection;
+                this.showNotification(`Text detection ${request.textDetection ? 'enabled' : 'disabled'}`, 'info');
+                sendResponse({ success: true });
+            } else if (request.action === 'updateTextConfidenceThreshold') {
+                this.settings.textConfidenceThreshold = request.textConfidenceThreshold;
+                this.showNotification(`Text confidence threshold updated to ${Math.round(request.textConfidenceThreshold * 100)}%`, 'info');
+                sendResponse({ success: true });
             }
         });
 
-        // Add right-click context menu for images
+        // Add context menu for all media types - but don't prevent default
         document.addEventListener('contextmenu', (e) => {
-            if (e.target.tagName === 'IMG') {
-                this.addImageContextMenu(e);
+            const target = e.target;
+            
+            // Check for different types of content
+            if (target.tagName === 'IMG') {
+                // Image analysis
+                this.addImageAnalysisButton(target, e.clientX, e.clientY);
+            } else if (target.tagName === 'VIDEO') {
+                // Video analysis
+                this.addVideoAnalysisButton(target, e.clientX, e.clientY);
+            } else if (target.tagName === 'AUDIO') {
+                // Audio analysis
+                this.addAudioAnalysisButton(target, e.clientX, e.clientY);
+            } else if (target.textContent && target.textContent.trim().length > 20) {
+                // Text analysis (for elements with substantial text content)
+                this.addTextAnalysisButton(target, e.clientX, e.clientY);
             }
         });
-
+        
+        // Add scroll event listener for Google Images infinite scroll
+        if (window.location.hostname.includes('google.com') && window.location.pathname.includes('/search') && window.location.search.includes('tbm=isch')) {
+            let scrollTimeout;
+            window.addEventListener('scroll', () => {
+                clearTimeout(scrollTimeout);
+                scrollTimeout = setTimeout(() => {
+                    // Scan for new images after scrolling stops
+                    this.scanGoogleImages();
+                }, 500);
+            });
+        }
+        
         // Watch for new videos being added to the page
         this.observeVideoChanges();
+        
+        // Add keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // Ctrl+Shift+F to toggle filter mode
+            if (e.ctrlKey && e.shiftKey && e.key === 'F') {
+                e.preventDefault();
+                this.filterMode = !this.filterMode;
+                this.updateFilterMode(this.filterMode);
+                this.showNotification(`Filter mode ${this.filterMode ? 'enabled' : 'disabled'}`, 'info');
+            }
+            
+            // Ctrl+Shift+R to restore all content
+            if (e.ctrlKey && e.shiftKey && e.key === 'R') {
+                e.preventDefault();
+                this.restoreRemovedContent();
+                this.showNotification('All removed content restored', 'success');
+            }
+        });
+        
+        console.log('🔧 Events bound');
     }
 
-    addImageContextMenu(e) {
-        // Remove existing context menu
-        const existingMenu = document.querySelector('.ai-context-menu');
-        if (existingMenu) {
-            existingMenu.remove();
-        }
-
-        // Create context menu
-        const menu = document.createElement('div');
-        menu.className = 'ai-context-menu';
-        menu.innerHTML = `
-            <div class="menu-item" data-action="scan">🔍 Scan for AI</div>
-            <div class="menu-item" data-action="analyze">📊 Detailed Analysis</div>
-        `;
+    addImageAnalysisButton(img, x, y) {
+        // Remove any existing analysis buttons
+        const existingButtons = document.querySelectorAll('.ai-analysis-button');
+        existingButtons.forEach(btn => btn.remove());
         
-        menu.style.cssText = `
+        // Create floating analysis button
+        const button = document.createElement('div');
+        button.className = 'ai-analysis-button';
+        button.innerHTML = '🤖';
+        button.title = 'Analyze with AI';
+        
+        button.style.cssText = `
             position: fixed;
-            top: ${e.clientY}px;
-            left: ${e.clientX}px;
-            background: white;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            top: ${y - 30}px;
+            left: ${x + 10}px;
+            width: 30px;
+            height: 30px;
+            background: #007bff;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 16px;
             z-index: 100000;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            font-size: 14px;
-            min-width: 150px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            transition: all 0.2s ease;
+            user-select: none;
         `;
-
-        // Style menu items
-        const menuItems = menu.querySelectorAll('.menu-item');
-        menuItems.forEach(item => {
-            item.style.cssText = `
-                padding: 8px 12px;
-                cursor: pointer;
-                border-bottom: 1px solid #eee;
-                transition: background 0.2s;
-            `;
-            
-            item.addEventListener('mouseenter', () => {
-                item.style.background = '#f5f5f5';
-            });
-            
-            item.addEventListener('mouseleave', () => {
-                item.style.background = 'white';
-            });
-            
-            item.addEventListener('click', () => {
-                const action = item.dataset.action;
-                if (action === 'scan') {
-                    this.scanImage(e.target);
-                } else if (action === 'analyze') {
-                    this.analyzeImage(e.target);
-                }
-                menu.remove();
-            });
-        });
-
-        // Remove border from last item
-        menuItems[menuItems.length - 1].style.borderBottom = 'none';
-
-        document.body.appendChild(menu);
-
-        // Remove menu when clicking outside
-        const removeMenu = () => {
-            menu.remove();
-            document.removeEventListener('click', removeMenu);
-        };
         
+        // Hover effects
+        button.addEventListener('mouseenter', () => {
+            button.style.transform = 'scale(1.1)';
+            button.style.background = '#0056b3';
+        });
+        
+        button.addEventListener('mouseleave', () => {
+            button.style.transform = 'scale(1)';
+            button.style.background = '#007bff';
+        });
+        
+        // Click to analyze
+        button.addEventListener('click', () => {
+            this.analyzeImage(img);
+            button.remove();
+        });
+        
+        document.body.appendChild(button);
+        
+        // Auto-remove after 3 seconds
         setTimeout(() => {
-            document.addEventListener('click', removeMenu);
-        }, 100);
+            if (button.parentNode) {
+                button.remove();
+            }
+        }, 3000);
+    }
+
+    addTextAnalysisButton(element, x, y) {
+        // Remove any existing analysis buttons
+        const existingButtons = document.querySelectorAll('.ai-text-analysis-button');
+        existingButtons.forEach(btn => btn.remove());
+        
+        // Create floating text analysis button
+        const button = document.createElement('div');
+        button.className = 'ai-text-analysis-button';
+        button.innerHTML = '📝';
+        button.title = 'Analyze Text with AI';
+        
+        button.style.cssText = `
+            position: fixed;
+            top: ${y - 30}px;
+            left: ${x + 10}px;
+            width: 30px;
+            height: 30px;
+            background: #28a745;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 16px;
+            z-index: 100000;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            transition: all 0.2s ease;
+            user-select: none;
+        `;
+        
+        // Hover effects
+        button.addEventListener('mouseenter', () => {
+            button.style.transform = 'scale(1.1)';
+            button.style.background = '#1e7e34';
+        });
+        
+        button.addEventListener('mouseleave', () => {
+            button.style.transform = 'scale(1)';
+            button.style.background = '#28a745';
+        });
+        
+        // Click to analyze text
+        button.addEventListener('click', () => {
+            this.analyzeTextElement(element);
+            button.remove();
+        });
+        
+        document.body.appendChild(button);
+        
+        // Auto-remove after 3 seconds
+        setTimeout(() => {
+            if (button.parentNode) {
+                button.remove();
+            }
+        }, 3000);
+    }
+
+    addVideoAnalysisButton(video, x, y) {
+        // Remove any existing analysis buttons
+        const existingButtons = document.querySelectorAll('.ai-video-analysis-button');
+        existingButtons.forEach(btn => btn.remove());
+        
+        // Create floating video analysis button
+        const button = document.createElement('div');
+        button.className = 'ai-video-analysis-button';
+        button.innerHTML = '🎥';
+        button.title = 'Analyze Video with AI';
+        
+        button.style.cssText = `
+            position: fixed;
+            top: ${y - 30}px;
+            left: ${x + 10}px;
+            width: 30px;
+            height: 30px;
+            background: #dc3545;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 16px;
+            z-index: 100000;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            transition: all 0.2s ease;
+            user-select: none;
+        `;
+        
+        // Hover effects
+        button.addEventListener('mouseenter', () => {
+            button.style.transform = 'scale(1.1)';
+            button.style.background = '#c82333';
+        });
+        
+        button.addEventListener('mouseleave', () => {
+            button.style.transform = 'scale(1)';
+            button.style.background = '#dc3545';
+        });
+        
+        // Click to analyze video
+        button.addEventListener('click', () => {
+            this.analyzeVideo(video);
+            button.remove();
+        });
+        
+        document.body.appendChild(button);
+        
+        // Auto-remove after 3 seconds
+        setTimeout(() => {
+            if (button.parentNode) {
+                button.remove();
+            }
+        }, 3000);
+    }
+
+    addAudioAnalysisButton(audio, x, y) {
+        // Remove any existing analysis buttons
+        const existingButtons = document.querySelectorAll('.ai-audio-analysis-button');
+        existingButtons.forEach(btn => btn.remove());
+        
+        // Create floating audio analysis button
+        const button = document.createElement('div');
+        button.className = 'ai-audio-analysis-button';
+        button.innerHTML = '🎵';
+        button.title = 'Analyze Audio with AI';
+        
+        button.style.cssText = `
+            position: fixed;
+            top: ${y - 30}px;
+            left: ${x + 10}px;
+            width: 30px;
+            height: 30px;
+            background: #6f42c1;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 16px;
+            z-index: 100000;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            transition: all 0.2s ease;
+            user-select: none;
+        `;
+        
+        // Hover effects
+        button.addEventListener('mouseenter', () => {
+            button.style.transform = 'scale(1.1)';
+            button.style.background = '#5a32a3';
+        });
+        
+        button.addEventListener('mouseleave', () => {
+            button.style.transform = 'scale(1)';
+            button.style.background = '#6f42c1';
+        });
+        
+        // Click to analyze audio
+        button.addEventListener('click', () => {
+            this.analyzeVideoAudio(audio);
+            button.remove();
+        });
+        
+        document.body.appendChild(button);
+        
+        // Auto-remove after 3 seconds
+        setTimeout(() => {
+            if (button.parentNode) {
+                button.remove();
+            }
+        }, 3000);
     }
 
     async analyzeImage(img) {
@@ -1405,8 +1740,9 @@ class DeepfakeDetectorContent {
         console.log(`🎵 Found ${audioElements.length} audio elements to scan`);
         
         for (const audio of audioElements) {
-            // Audio scanning would be similar to video audio extraction
-            console.log('🎵 Audio element found:', audio);
+            if (this.isValidAudio(audio)) {
+                // Audio scanning logic would go here
+            }
         }
     }
 
@@ -1430,17 +1766,49 @@ class DeepfakeDetectorContent {
         const src = img.src.toLowerCase();
         const skipPatterns = [
             'avatar', 'icon', 'logo', 'emoji', 'favicon', 'button',
-            'spinner', 'loading', 'placeholder', 'ad', 'banner'
+            'spinner', 'loading', 'placeholder', 'ad', 'banner',
+            'gif-icon', 'gif-thumbnail' // Skip GIF icons/thumbnails
         ];
         
         if (skipPatterns.some(pattern => src.includes(pattern))) {
             return false;
         }
         
-        // Skip Twitter-specific small images
+        // Google Images specific handling
+        if (window.location.hostname.includes('google.com') && window.location.pathname.includes('/search') && window.location.search.includes('tbm=isch')) {
+            // For Google Images, be more lenient with sizes but skip very small ones
+            if (img.naturalWidth < 80 || img.naturalHeight < 80) {
+                return false;
+            }
+            
+            // Skip Google Images specific small elements
+            if (src.includes('gstatic.com') && (img.naturalWidth < 100 || img.naturalHeight < 100)) {
+                return false;
+            }
+            
+            // Skip Google's own UI elements
+            if (src.includes('googleusercontent.com') && src.includes('icon')) {
+                return false;
+            }
+        }
+        
+        // Twitter-specific small images
         if (window.location.hostname.includes('twitter.com') || window.location.hostname.includes('x.com')) {
             // Twitter has many small profile images and icons
             if (img.naturalWidth < 100 || img.naturalHeight < 100) {
+                return false;
+            }
+        }
+        
+        // Special handling for GIFs - allow them but with some restrictions
+        if (src.endsWith('.gif') || src.includes('gif')) {
+            // Skip very small GIFs (likely loading indicators)
+            if (img.naturalWidth < 80 || img.naturalHeight < 80) {
+                return false;
+            }
+            
+            // Skip GIFs that are likely UI elements
+            if (src.includes('loading') || src.includes('spinner') || src.includes('progress')) {
                 return false;
             }
         }
@@ -1675,6 +2043,617 @@ class DeepfakeDetectorContent {
             rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
             rect.right <= (window.innerWidth || document.documentElement.clientWidth)
         );
+    }
+
+    // Google Images specific scanning
+    scanGoogleImages() {
+        if (!window.location.hostname.includes('google.com') || !window.location.pathname.includes('/search') || !window.location.search.includes('tbm=isch')) {
+            return;
+        }
+        
+        console.log('🔍 Scanning Google Images specifically...');
+        
+        // Look for Google Images containers
+        const imageContainers = document.querySelectorAll('.isv-r, .rg_i, [data-ved], [jsname="sTFXNd"]');
+        
+        imageContainers.forEach(container => {
+            const images = container.querySelectorAll('img');
+            images.forEach(img => {
+                if (this.isValidImage(img) && !this.scannedElements.has(img)) {
+                    this.scanImage(img);
+                }
+            });
+        });
+        
+        // Also scan any images that might not be in containers yet
+        const allImages = document.querySelectorAll('img');
+        allImages.forEach(img => {
+            if (this.isValidImage(img) && !this.scannedElements.has(img)) {
+                this.scanImage(img);
+            }
+        });
+    }
+
+    // Text detection functions
+    async scanTexts() {
+        console.log('📝 Scanning for text content...');
+        
+        // Scan different types of text content based on the website
+        const hostname = window.location.hostname;
+        
+        if (hostname.includes('twitter.com') || hostname.includes('x.com')) {
+            this.scanTwitterTexts();
+        } else if (hostname.includes('youtube.com')) {
+            this.scanYouTubeTexts();
+        } else {
+            this.scanGenericTexts();
+        }
+    }
+
+    async scanTwitterTexts() {
+        console.log('🐦 Scanning Twitter texts...');
+        
+        // Look for tweet text elements
+        const tweetSelectors = [
+            '[data-testid="tweetText"]',
+            '[data-testid="tweet"] [lang]',
+            'article[data-testid="tweet"] div[lang]',
+            '.css-1dbjc4n.r-1wbh5a2.r-dnmrzs.r-1ny4l3l div[lang]'
+        ];
+        
+        tweetSelectors.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(element => {
+                if (this.isValidTextElement(element)) {
+                    this.scanTextElement(element);
+                }
+            });
+        });
+    }
+
+    async scanYouTubeTexts() {
+        console.log('🎥 Scanning YouTube texts...');
+        
+        // Look for comment text elements
+        const commentSelectors = [
+            '#content-text',
+            '#content-text span',
+            '.ytd-comment-renderer #content-text',
+            '.ytd-comment-thread-renderer #content-text'
+        ];
+        
+        commentSelectors.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(element => {
+                if (this.isValidTextElement(element)) {
+                    this.scanTextElement(element);
+                }
+            });
+        });
+    }
+
+    async scanGenericTexts() {
+        console.log('📄 Scanning generic texts...');
+        
+        // Look for common text content patterns
+        const textSelectors = [
+            'p[class*="comment"]',
+            'div[class*="comment"]',
+            'span[class*="comment"]',
+            'p[class*="text"]',
+            'div[class*="text"]',
+            'span[class*="text"]'
+        ];
+        
+        textSelectors.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(element => {
+                if (this.isValidTextElement(element)) {
+                    this.scanTextElement(element);
+                }
+            });
+        });
+    }
+
+    isValidTextElement(element) {
+        if (!element || !element.textContent) {
+            return false;
+        }
+        
+        const text = element.textContent.trim();
+        
+        // Skip if already scanned
+        if (this.scannedTexts.has(text)) {
+            return false;
+        }
+        
+        // Skip very short or very long texts
+        if (text.length < 20 || text.length > 2000) {
+            return false;
+        }
+        
+        // Skip if element is hidden
+        if (element.offsetParent === null) {
+            return false;
+        }
+        
+        return true;
+    }
+
+    async scanTextElement(element) {
+        const text = element.textContent.trim();
+        
+        // Check if text detection is enabled
+        if (!this.settings.textDetection) {
+            return;
+        }
+        
+        // Mark as scanned
+        this.scannedTexts.add(text);
+        
+        console.log(`📝 Scanning text: "${text.substring(0, 100)}..."`);
+        
+        try {
+            const result = await this.analyzeText(text);
+            console.log(`📝 Text analysis result:`, result);
+            
+            // Check if confidence meets threshold
+            if (result.confidence >= this.settings.textConfidenceThreshold) {
+                if (this.filterMode && result.is_bot) {
+                    console.log(`🚫 Hiding bot/LLM text (${Math.round(result.confidence * 100)}%)`);
+                    
+                    // Show visible notification
+                    const confidence = Math.round(result.confidence * 100);
+                    const detectionType = result.detection_type || 'bot';
+                    this.showNotification(
+                        `🚫 ${detectionType.toUpperCase()} content detected (${confidence}%) - ${text.substring(0, 50)}...`,
+                        'warning'
+                    );
+                    
+                    this.hideTextContent(element, result);
+                } else if (result.is_bot && result.confidence > 0.8) {
+                    // Show notification for high-confidence bot detection even if filter is off
+                    const confidence = Math.round(result.confidence * 100);
+                    this.showNotification(
+                        `🤖 High-confidence bot detection (${confidence}%) - ${text.substring(0, 50)}...`,
+                        'info'
+                    );
+                }
+            } else {
+                console.log(`📝 Text confidence below threshold: ${result.confidence} < ${this.settings.textConfidenceThreshold}`);
+            }
+        } catch (error) {
+            console.error('❌ Text scan error:', error);
+            this.showNotification('Error analyzing text content', 'error');
+        }
+    }
+
+    async analyzeText(text) {
+        try {
+            const response = await fetch(`${this.apiUrl}/detect-text`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    text: text,
+                    confidence_threshold: this.settings.textConfidenceThreshold || 0.7
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error('❌ Text analysis error:', error);
+            throw error;
+        }
+    }
+
+    hideTextContent(element, result) {
+        // If removeContent is enabled, completely remove the element
+        if (this.removeContent) {
+            console.log(`🗑️ Removing bot/LLM text content`);
+            this.removeTextElement(element, result);
+            return;
+        }
+        
+        // Otherwise, create overlay
+        console.log(`🚫 Creating text overlay`);
+        this.createTextOverlay(element, result);
+    }
+
+    removeTextElement(element, result) {
+        // Store info about removed element for potential restoration
+        const removedInfo = {
+            element: element,
+            type: 'text',
+            result: result,
+            parent: element.parentElement,
+            nextSibling: element.nextSibling,
+            originalText: element.textContent
+        };
+        
+        // Add to removed elements list
+        if (!this.removedElements) {
+            this.removedElements = [];
+        }
+        this.removedElements.push(removedInfo);
+        
+        // Website-specific removal logic
+        const hostname = window.location.hostname;
+        
+        if (hostname.includes('twitter.com') || hostname.includes('x.com')) {
+            this.removeTwitterText(element);
+        } else if (hostname.includes('youtube.com')) {
+            this.removeYouTubeText(element);
+        } else {
+            element.remove();
+        }
+        
+        // Update filter count
+        this.updateFilterCount();
+        
+        console.log(`🗑️ Removed text: ${result.detection_type} content (${Math.round(result.confidence * 100)}%)`);
+    }
+
+    removeTwitterText(element) {
+        console.log(`🐦 Attempting to remove Twitter text`);
+        
+        // Look for the tweet container
+        const tweetContainer = element.closest('[data-testid="tweet"]') || 
+                              element.closest('article[data-testid="tweet"]') ||
+                              element.closest('[role="article"]');
+        
+        if (tweetContainer) {
+            tweetContainer.remove();
+            console.log(`🗑️ Removed Twitter tweet container`);
+        } else {
+            element.remove();
+            console.log(`🗑️ Removed individual Twitter text element`);
+        }
+    }
+
+    removeYouTubeText(element) {
+        console.log(`🎥 Attempting to remove YouTube text`);
+        
+        // Look for the comment container
+        const commentContainer = element.closest('ytd-comment-renderer') ||
+                                element.closest('ytd-comment-thread-renderer') ||
+                                element.closest('[id*="comment"]');
+        
+        if (commentContainer) {
+            commentContainer.remove();
+            console.log(`🗑️ Removed YouTube comment container`);
+        } else {
+            element.remove();
+            console.log(`🗑️ Removed individual YouTube text element`);
+        }
+    }
+
+    createTextOverlay(element, result) {
+        // Create overlay for text content
+        const overlay = document.createElement('div');
+        overlay.className = 'ai-text-overlay';
+        
+        // Determine overlay content based on detection type
+        let overlayText = 'Bot/LLM Content';
+        let overlayColor = 'rgba(255, 68, 68, 0.9)';
+        let overlayIcon = '🤖';
+        
+        if (result.detection_type === 'suspicious') {
+            overlayText = 'Suspicious Content';
+            overlayColor = 'rgba(255, 165, 0, 0.9)';
+            overlayIcon = '⚠️';
+        } else if (result.detection_type === 'bot') {
+            overlayText = 'Bot Content';
+            overlayColor = 'rgba(255, 68, 68, 0.9)';
+            overlayIcon = '🤖';
+        } else if (result.detection_type === 'llm') {
+            overlayText = 'AI-Generated Text';
+            overlayColor = 'rgba(255, 68, 68, 0.9)';
+            overlayIcon = '🤖';
+        }
+        
+        overlay.innerHTML = `
+            <div class="overlay-content">
+                <div class="overlay-icon">${overlayIcon}</div>
+                <div class="overlay-text">${overlayText}</div>
+                <div class="overlay-confidence">${Math.round(result.confidence * 100)}% confidence</div>
+                <div class="overlay-type">${result.detection_type}</div>
+                <button class="overlay-show-btn">Show Anyway</button>
+                <button class="overlay-analyze-btn">Re-analyze</button>
+                <button class="overlay-remove-btn">Remove</button>
+            </div>
+        `;
+        
+        overlay.style.cssText = `
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: ${overlayColor};
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            border-radius: 8px;
+            color: white;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            text-align: center;
+            backdrop-filter: blur(2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        `;
+        
+        // Style the overlay content
+        const overlayContent = overlay.querySelector('.overlay-content');
+        overlayContent.style.cssText = `
+            padding: 20px;
+            max-width: 90%;
+        `;
+        
+        // Style the icon
+        const overlayIconEl = overlay.querySelector('.overlay-icon');
+        overlayIconEl.style.cssText = `
+            font-size: 48px;
+            margin-bottom: 10px;
+            display: block;
+        `;
+        
+        // Style the text
+        const overlayTextEl = overlay.querySelector('.overlay-text');
+        overlayTextEl.style.cssText = `
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 8px;
+        `;
+        
+        // Style the confidence
+        const overlayConfidence = overlay.querySelector('.overlay-confidence');
+        overlayConfidence.style.cssText = `
+            font-size: 14px;
+            opacity: 0.9;
+            margin-bottom: 8px;
+        `;
+        
+        // Style the type
+        const overlayType = overlay.querySelector('.overlay-type');
+        overlayType.style.cssText = `
+            font-size: 12px;
+            opacity: 0.7;
+            margin-bottom: 15px;
+        `;
+        
+        // Style the buttons
+        const buttons = overlay.querySelectorAll('button');
+        buttons.forEach(button => {
+            button.style.cssText = `
+                background: rgba(255, 255, 255, 0.2);
+                color: white;
+                border: 1px solid rgba(255, 255, 255, 0.3);
+                padding: 8px 12px;
+                margin: 5px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+                transition: background 0.2s;
+            `;
+            
+            button.addEventListener('mouseenter', () => {
+                button.style.background = 'rgba(255, 255, 255, 0.3)';
+            });
+            
+            button.addEventListener('mouseleave', () => {
+                button.style.background = 'rgba(255, 255, 255, 0.2)';
+            });
+        });
+        
+        // Add button event listeners
+        const showBtn = overlay.querySelector('.overlay-show-btn');
+        const analyzeBtn = overlay.querySelector('.overlay-analyze-btn');
+        const removeBtn = overlay.querySelector('.overlay-remove-btn');
+        
+        showBtn.addEventListener('click', () => {
+            overlay.remove();
+        });
+        
+        analyzeBtn.addEventListener('click', async () => {
+            const originalText = element.textContent.trim();
+            try {
+                const newResult = await this.analyzeText(originalText);
+                console.log('🔄 Re-analysis result:', newResult);
+                
+                if (!newResult.is_bot) {
+                    overlay.remove();
+                    this.showNotification('Content re-analyzed and approved', 'success');
+                } else {
+                    this.showNotification('Content still flagged as bot/LLM', 'warning');
+                }
+            } catch (error) {
+                console.error('❌ Re-analysis error:', error);
+                this.showNotification('Re-analysis failed', 'error');
+            }
+        });
+        
+        removeBtn.addEventListener('click', () => {
+            this.removeTextElement(element, result);
+            overlay.remove();
+        });
+        
+        // Position the overlay relative to the element
+        const rect = element.getBoundingClientRect();
+        const parentRect = element.parentElement.getBoundingClientRect();
+        
+        overlay.style.position = 'absolute';
+        overlay.style.top = `${rect.top - parentRect.top}px`;
+        overlay.style.left = `${rect.left - parentRect.left}px`;
+        overlay.style.width = `${rect.width}px`;
+        overlay.style.height = `${rect.height}px`;
+        
+        // Add overlay to parent element
+        element.parentElement.style.position = 'relative';
+        element.parentElement.appendChild(overlay);
+        
+        console.log(`🚫 Created text overlay for ${result.detection_type} content`);
+    }
+
+    async analyzeTextElement(element) {
+        const text = element.textContent.trim();
+        
+        try {
+            this.showNotification('Analyzing text...', 'info');
+            
+            const result = await this.analyzeText(text);
+            
+            // Show detailed result
+            this.showTextResult(result, element);
+            
+        } catch (error) {
+            console.error('Text analysis error:', error);
+            this.showNotification('Error analyzing text', 'error');
+        }
+    }
+
+    showTextResult(result, element) {
+        // Create result popup
+        const popup = document.createElement('div');
+        popup.className = 'ai-text-result-popup';
+        
+        const confidence = Math.round(result.confidence * 100);
+        const status = result.is_bot ? '🚫 BOT/LLM DETECTED' : '✅ LIKELY HUMAN';
+        const statusColor = result.is_bot ? '#ff4444' : '#44aa44';
+        
+        popup.innerHTML = `
+            <div class="popup-header">
+                <h3>Text Analysis Result</h3>
+                <button class="close-btn">×</button>
+            </div>
+            <div class="popup-content">
+                <div class="result-status" style="color: ${statusColor}">${status}</div>
+                <div class="result-confidence">Confidence: ${confidence}%</div>
+                <div class="result-type">Type: ${result.detection_type}</div>
+                <div class="result-analysis">${result.analysis}</div>
+                <div class="result-model">Model: ${result.model_used}</div>
+                <div class="result-text-preview">
+                    <strong>Analyzed Text:</strong><br>
+                    <em>"${element.textContent.substring(0, 100)}${element.textContent.length > 100 ? '...' : ''}"</em>
+                </div>
+            </div>
+        `;
+        
+        popup.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            z-index: 100000;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 500px;
+            width: 90%;
+        `;
+        
+        // Style header
+        const header = popup.querySelector('.popup-header');
+        header.style.cssText = `
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 20px;
+            border-bottom: 1px solid #eee;
+        `;
+        
+        header.querySelector('h3').style.cssText = `
+            margin: 0;
+            font-size: 16px;
+            font-weight: 600;
+        `;
+        
+        const closeBtn = header.querySelector('.close-btn');
+        closeBtn.style.cssText = `
+            background: none;
+            border: none;
+            font-size: 20px;
+            cursor: pointer;
+            color: #666;
+        `;
+        
+        // Style content
+        const content = popup.querySelector('.popup-content');
+        content.style.cssText = `
+            padding: 20px;
+        `;
+        
+        const statusEl = content.querySelector('.result-status');
+        statusEl.style.cssText = `
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        `;
+        
+        const confidenceEl = content.querySelector('.result-confidence');
+        confidenceEl.style.cssText = `
+            font-size: 14px;
+            margin-bottom: 8px;
+        `;
+        
+        const typeEl = content.querySelector('.result-type');
+        typeEl.style.cssText = `
+            font-size: 14px;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        `;
+        
+        const analysisEl = content.querySelector('.result-analysis');
+        analysisEl.style.cssText = `
+            font-size: 14px;
+            margin-bottom: 15px;
+            line-height: 1.4;
+        `;
+        
+        const modelEl = content.querySelector('.result-model');
+        modelEl.style.cssText = `
+            font-size: 12px;
+            color: #666;
+            font-style: italic;
+            margin-bottom: 15px;
+        `;
+        
+        const textPreviewEl = content.querySelector('.result-text-preview');
+        textPreviewEl.style.cssText = `
+            font-size: 13px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border-left: 3px solid #007bff;
+        `;
+        
+        // Add close functionality
+        closeBtn.addEventListener('click', () => popup.remove());
+        
+        // Close on outside click
+        popup.addEventListener('click', (e) => {
+            if (e.target === popup) {
+                popup.remove();
+            }
+        });
+        
+        // Close on escape key
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                popup.remove();
+                document.removeEventListener('keydown', handleEscape);
+            }
+        };
+        document.addEventListener('keydown', handleEscape);
+        
+        document.body.appendChild(popup);
     }
 }
 

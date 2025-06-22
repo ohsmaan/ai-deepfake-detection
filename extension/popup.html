@@ -55,6 +55,28 @@
             </div>
         </div>
 
+        <div class="text-detection-section">
+            <h3>📝 Text Detection</h3>
+            <div class="text-controls">
+                <div class="control-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="textDetectionToggle">
+                        <span class="checkmark"></span>
+                        Enable Text Detection
+                    </label>
+                    <p class="control-description">Detect bot/LLM-generated text on Twitter, YouTube, and other sites</p>
+                </div>
+                <div class="control-group">
+                    <label for="textConfidenceThreshold">Confidence Threshold:</label>
+                    <div class="slider-container">
+                        <input type="range" id="textConfidenceThreshold" min="0.5" max="0.95" step="0.05" value="0.8">
+                        <span id="textConfidenceValue">80%</span>
+                    </div>
+                    <p class="control-description">Higher threshold = fewer false positives</p>
+                </div>
+            </div>
+        </div>
+
         <div class="results-section">
             <h3>Detection Results</h3>
             <div id="results" class="results">

@@ -18,6 +18,7 @@ pkgs.mkShell {
     python312Packages.fastapi-cli
     python312Packages.librosa
     python312Packages.llvmlite
+    python312Packages.groq
   ];
 
   # Environment variables to help pip & Poetry use binaries, not source builds

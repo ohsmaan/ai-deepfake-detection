@@ -10,6 +10,7 @@ class DeepfakeDetectorPopup {
         await this.checkApiStatus();
         await this.loadResults();
         await this.loadFilterState();
+        await this.loadTextDetectionState();
     }
 
     bindEvents() {
@@ -18,6 +19,10 @@ class DeepfakeDetectorPopup {
         document.getElementById('scanAudioBtn').addEventListener('click', () => this.scanAudio());
         document.getElementById('clearBtn').addEventListener('click', () => this.clearResults());
         document.getElementById('filterToggleBtn').addEventListener('click', () => this.toggleFilter());
+        
+        // Text detection controls
+        document.getElementById('textDetectionToggle').addEventListener('change', () => this.toggleTextDetection());
+        document.getElementById('textConfidenceThreshold').addEventListener('input', (e) => this.updateTextConfidence(e));
     }
 
     async checkApiStatus() {
@@ -317,6 +322,71 @@ class DeepfakeDetectorPopup {
             });
         } catch (error) {
             console.error('Error updating filter mode:', error);
+        }
+    }
+
+    async loadTextDetectionState() {
+        const data = await chrome.storage.sync.get(['textDetection', 'textConfidenceThreshold']);
+        const textDetection = data.textDetection !== undefined ? data.textDetection : true;
+        const textConfidenceThreshold = data.textConfidenceThreshold || 0.8;
+        
+        // Update checkbox
+        const toggleCheckbox = document.getElementById('textDetectionToggle');
+        toggleCheckbox.checked = textDetection;
+        
+        // Update slider
+        const confidenceSlider = document.getElementById('textConfidenceThreshold');
+        const confidenceValue = document.getElementById('textConfidenceValue');
+        confidenceSlider.value = textConfidenceThreshold;
+        confidenceValue.textContent = `${Math.round(textConfidenceThreshold * 100)}%`;
+    }
+
+    async toggleTextDetection() {
+        const data = await chrome.storage.sync.get(['textDetection']);
+        const currentMode = data.textDetection !== undefined ? data.textDetection : true;
+        const newMode = !currentMode;
+        
+        await chrome.storage.sync.set({ textDetection: newMode });
+        
+        // Update popup UI
+        const toggleCheckbox = document.getElementById('textDetectionToggle');
+        toggleCheckbox.checked = newMode;
+        
+        if (newMode) {
+            this.setStatus('Text Detection: ENABLED', 'success');
+        } else {
+            this.setStatus('Text Detection: DISABLED', 'info');
+        }
+        
+        // Send message to content script to update text detection state
+        try {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            await chrome.tabs.sendMessage(tab.id, { 
+                action: 'updateTextDetection', 
+                textDetection: newMode 
+            });
+        } catch (error) {
+            console.error('Error updating text detection mode:', error);
+        }
+    }
+
+    async updateTextConfidence(e) {
+        const confidenceThreshold = parseFloat(e.target.value);
+        const confidenceValue = document.getElementById('textConfidenceValue');
+        confidenceValue.textContent = `${Math.round(confidenceThreshold * 100)}%`;
+        
+        await chrome.storage.sync.set({ textConfidenceThreshold: confidenceThreshold });
+        this.setStatus(`Text Confidence Threshold: ${Math.round(confidenceThreshold * 100)}%`, 'info');
+        
+        // Send message to content script to update text confidence threshold
+        try {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            await chrome.tabs.sendMessage(tab.id, { 
+                action: 'updateTextConfidenceThreshold', 
+                textConfidenceThreshold: confidenceThreshold 
+            });
+        } catch (error) {
+            console.error('Error updating text confidence threshold:', error);
         }
     }
 }

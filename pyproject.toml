@@ -30,6 +30,7 @@ requests = "^2.32.4"
 soundfile = "^0.12.1"
 scipy = "^1.14.0"
 pydub = "^0.25.1"
+groq = "^0.28.0"
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.3.0"
