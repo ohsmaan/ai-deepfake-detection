@@ -14,6 +14,8 @@ pkgs.mkShell {
     python312Packages.sentence-transformers
     python312Packages.scikit-learn
     python312Packages.pip
+    python312Packages.fastapi
+    python312Packages.fastapi-cli
   ];
 
   # Environment variables to help pip & Poetry use binaries, not source builds
