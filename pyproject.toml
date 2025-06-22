@@ -27,6 +27,9 @@ fastapi = "^0.115.13"
 huggingface-hub = "^0.33.0"
 python-dotenv = "^1.1.0"
 requests = "^2.32.4"
+soundfile = "^0.12.1"
+scipy = "^1.14.0"
+pydub = "^0.25.1"
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.3.0"

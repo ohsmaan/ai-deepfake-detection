@@ -25,16 +25,40 @@
                 <span class="btn-icon">🔍</span>
                 Scan Page Images
             </button>
+            <button id="scanVideosBtn" class="btn btn-primary">
+                <span class="btn-icon">🎥</span>
+                Scan Page Videos
+            </button>
+            <button id="scanAudioBtn" class="btn btn-primary">
+                <span class="btn-icon">🎵</span>
+                Scan Page Audio
+            </button>
             <button id="clearBtn" class="btn btn-secondary">
                 <span class="btn-icon">🗑️</span>
                 Clear Results
             </button>
         </div>
 
+        <div class="filter-section">
+            <h3>🤖 AI Content Filter</h3>
+            <div class="filter-controls">
+                <button id="filterToggleBtn" class="btn btn-filter">
+                    <span class="btn-icon">🚫</span>
+                    <span id="filterToggleText">Enable Filter</span>
+                </button>
+                <div class="filter-info">
+                    <p>Automatically hide AI-generated content on Twitter/YouTube</p>
+                    <div class="filter-stats">
+                        <span id="filterCount">0</span> items hidden
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="results-section">
             <h3>Detection Results</h3>
             <div id="results" class="results">
-                <div class="no-results">No images scanned yet</div>
+                <div class="no-results">No content scanned yet</div>
             </div>
         </div>
 
@@ -47,6 +71,14 @@
             <div class="instruction-item">
                 <span class="instruction-icon">🔍</span>
                 <span>Select "Detect Deepfake" from the menu</span>
+            </div>
+            <div class="instruction-item">
+                <span class="instruction-icon">🎥</span>
+                <span>Click "Analyze Video" button on videos</span>
+            </div>
+            <div class="instruction-item">
+                <span class="instruction-icon">🎵</span>
+                <span>Audio analysis runs automatically with videos</span>
             </div>
             <div class="instruction-item">
                 <span class="instruction-icon">📊</span>

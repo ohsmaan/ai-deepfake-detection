@@ -269,4 +269,73 @@ footer {
 
 .results::-webkit-scrollbar-thumb:hover {
     background: #a8a8a8;
+}
+
+/* Filter Section */
+.filter-section {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 16px;
+    margin: 16px 0;
+    border: 1px solid #e9ecef;
+}
+
+.filter-section h3 {
+    margin: 0 0 12px 0;
+    color: #333;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.filter-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.btn-filter {
+    background: #666;
+    color: white;
+    border: none;
+    padding: 10px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.btn-filter.active {
+    background: #ff4444;
+    box-shadow: 0 0 10px rgba(255, 68, 68, 0.3);
+}
+
+.btn-filter:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.filter-info {
+    text-align: center;
+}
+
+.filter-info p {
+    margin: 0 0 8px 0;
+    color: #666;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.filter-stats {
+    font-size: 11px;
+    color: #888;
+}
+
+.filter-stats span {
+    font-weight: bold;
+    color: #ff4444;
 } 

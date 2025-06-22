@@ -9,11 +9,15 @@ class DeepfakeDetectorPopup {
         this.bindEvents();
         await this.checkApiStatus();
         await this.loadResults();
+        await this.loadFilterState();
     }
 
     bindEvents() {
         document.getElementById('scanBtn').addEventListener('click', () => this.scanPage());
+        document.getElementById('scanVideosBtn').addEventListener('click', () => this.scanVideos());
+        document.getElementById('scanAudioBtn').addEventListener('click', () => this.scanAudio());
         document.getElementById('clearBtn').addEventListener('click', () => this.clearResults());
+        document.getElementById('filterToggleBtn').addEventListener('click', () => this.toggleFilter());
     }
 
     async checkApiStatus() {
@@ -54,6 +58,52 @@ class DeepfakeDetectorPopup {
         }
 
         this.enableButton('scanBtn');
+    }
+
+    async scanVideos() {
+        this.setStatus('Scanning page videos...', 'loading');
+        this.disableButton('scanVideosBtn');
+
+        try {
+            // Send message to content script to scan videos
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            const response = await chrome.tabs.sendMessage(tab.id, { action: 'scanVideos' });
+            
+            if (response && response.videos) {
+                this.setStatus(`Found ${response.videos.length} videos on page`, 'success');
+                // Note: Video analysis is done directly in content script for speed
+            } else {
+                this.setStatus('No videos found on page', 'error');
+            }
+        } catch (error) {
+            console.error('Video scan error:', error);
+            this.setStatus('Error scanning videos', 'error');
+        }
+
+        this.enableButton('scanVideosBtn');
+    }
+
+    async scanAudio() {
+        this.setStatus('Scanning page audio...', 'loading');
+        this.disableButton('scanAudioBtn');
+
+        try {
+            // Send message to content script to scan audio
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            const response = await chrome.tabs.sendMessage(tab.id, { action: 'scanAudio' });
+            
+            if (response && response.audio) {
+                this.setStatus(`Found ${response.audio.length} audio sources on page`, 'success');
+                // Note: Audio analysis is done directly in content script for speed
+            } else {
+                this.setStatus('No audio sources found on page', 'error');
+            }
+        } catch (error) {
+            console.error('Audio scan error:', error);
+            this.setStatus('Error scanning audio', 'error');
+        }
+
+        this.enableButton('scanAudioBtn');
     }
 
     async processImages(images) {
@@ -118,7 +168,7 @@ class DeepfakeDetectorPopup {
         const resultsContainer = document.getElementById('results');
         
         if (this.results.length === 0) {
-            resultsContainer.innerHTML = '<div class="no-results">No images scanned yet</div>';
+            resultsContainer.innerHTML = '<div class="no-results">No content scanned yet</div>';
             return;
         }
 
@@ -215,6 +265,59 @@ class DeepfakeDetectorPopup {
         const data = await chrome.storage.local.get(['results']);
         this.results = data.results || [];
         await this.displayResults();
+    }
+
+    async loadFilterState() {
+        const data = await chrome.storage.sync.get(['filterMode']);
+        const filterMode = data.filterMode || false;
+        
+        const toggleBtn = document.getElementById('filterToggleBtn');
+        const toggleText = document.getElementById('filterToggleText');
+        
+        if (filterMode) {
+            toggleBtn.classList.add('active');
+            toggleText.textContent = 'Disable Filter';
+            toggleBtn.style.background = '#ff4444';
+        } else {
+            toggleBtn.classList.remove('active');
+            toggleText.textContent = 'Enable Filter';
+            toggleBtn.style.background = '#666';
+        }
+    }
+
+    async toggleFilter() {
+        const data = await chrome.storage.sync.get(['filterMode']);
+        const currentMode = data.filterMode || false;
+        const newMode = !currentMode;
+        
+        await chrome.storage.sync.set({ filterMode: newMode });
+        
+        // Update popup UI
+        const toggleBtn = document.getElementById('filterToggleBtn');
+        const toggleText = document.getElementById('filterToggleText');
+        
+        if (newMode) {
+            toggleBtn.classList.add('active');
+            toggleText.textContent = 'Disable Filter';
+            toggleBtn.style.background = '#ff4444';
+            this.setStatus('AI Content Filter: ENABLED', 'success');
+        } else {
+            toggleBtn.classList.remove('active');
+            toggleText.textContent = 'Enable Filter';
+            toggleBtn.style.background = '#666';
+            this.setStatus('AI Content Filter: DISABLED', 'info');
+        }
+        
+        // Send message to content script to update filter state
+        try {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            await chrome.tabs.sendMessage(tab.id, { 
+                action: 'updateFilterMode', 
+                filterMode: newMode 
+            });
+        } catch (error) {
+            console.error('Error updating filter mode:', error);
+        }
     }
 }
 
