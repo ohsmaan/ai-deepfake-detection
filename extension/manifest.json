@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "AI Deepfake Detector",
+  "version": "1.0.0",
+  "description": "Detect AI-generated deepfakes in images and videos on web pages",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "http://localhost:8001/*",
+    "https://*/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AI Deepfake Detector"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"]
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

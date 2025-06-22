@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Deepfake Detector</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 AI Deepfake Detector</h1>
+            <p class="subtitle">Right-click any image to detect deepfakes</p>
+        </header>
+
+        <div class="status-section">
+            <div id="status" class="status">
+                <div class="status-icon">🔍</div>
+                <div class="status-text">Ready to detect</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="scanBtn" class="btn btn-primary">
+                <span class="btn-icon">🔍</span>
+                Scan Page Images
+            </button>
+            <button id="clearBtn" class="btn btn-secondary">
+                <span class="btn-icon">🗑️</span>
+                Clear Results
+            </button>
+        </div>
+
+        <div class="results-section">
+            <h3>Detection Results</h3>
+            <div id="results" class="results">
+                <div class="no-results">No images scanned yet</div>
+            </div>
+        </div>
+
+        <div class="instructions">
+            <h3>💡 How to Use</h3>
+            <div class="instruction-item">
+                <span class="instruction-icon">🖱️</span>
+                <span>Right-click any image on the page</span>
+            </div>
+            <div class="instruction-item">
+                <span class="instruction-icon">🔍</span>
+                <span>Select "Detect Deepfake" from the menu</span>
+            </div>
+            <div class="instruction-item">
+                <span class="instruction-icon">📊</span>
+                <span>View results in the notification</span>
+            </div>
+        </div>
+
+        <footer>
+            <div class="api-status">
+                <span id="apiStatus" class="status-indicator">●</span>
+                <span id="apiStatusText">API: Unknown</span>
+            </div>
+        </footer>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

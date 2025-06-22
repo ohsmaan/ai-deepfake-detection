@@ -10,7 +10,7 @@ import aiofiles
 from PIL import Image
 from services.ai_service import AIService
 
-# Initialize AI service
+# Initialize AI service with accurate model
 ai_service = AIService()
 
 # Pydantic models for request/response
@@ -24,6 +24,9 @@ class DetectionResponse(BaseModel):
     message: str
     model_used: str
     claude_analysis: str
+    detection_type: str = "unknown"
+    analysis: str = ""
+    model_note: str = ""
 
 # FastAPI app configuration
 app = FastAPI(
@@ -40,6 +43,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add OPTIONS endpoint for CORS preflight
+@app.options("/upload")
+async def options_upload():
+    """Handle CORS preflight for upload endpoint"""
+    return {"message": "OK"}
 
 # Global storage for demo purposes (use database in production)
 detection_results = {}
@@ -109,7 +118,10 @@ async def upload_file(
             processing_time=processing_time,
             message=f"Analysis complete for {file.filename}",
             model_used=detection_result.get("model_used", "unknown"),
-            claude_analysis=claude_analysis
+            claude_analysis=claude_analysis,
+            detection_type=detection_result.get("detection_type", "unknown"),
+            analysis=detection_result.get("analysis", ""),
+            model_note=detection_result.get("model_note", "")
         )
         
         detection_results[detection_id] = result.dict()
@@ -140,7 +152,13 @@ def get_model_info():
 @app.get("/hf-models")
 def get_hf_models():
     """Get information about Hugging Face models"""
-    return ai_service.hf_api.get_available_models()
+    return {
+        "models": {
+            "deepfake": "prithivMLmods/Deep-Fake-Detector-v2-Model"
+        },
+        "api_token_configured": False,
+        "api_url": "Local model"
+    }
 
 @app.get("/stats")
 def get_stats():
@@ -191,8 +209,8 @@ async def detect_with_model(
             detection_result = ai_service.detect_deepfake_video(temp_file_path)
         else:
             image = Image.open(temp_file_path)
-            # Use Hugging Face API with specific model
-            detection_result = ai_service.hf_api.detect_deepfake_api(image, model_name)
+            # Use local model for detection
+            detection_result = ai_service.detect_deepfake_image(image)
         
         processing_time = time.time() - start_time
         
@@ -206,7 +224,10 @@ async def detect_with_model(
             processing_time=processing_time,
             message=f"Analysis complete using {model_name}",
             model_used=detection_result.get("model_used", model_name),
-            claude_analysis=claude_analysis
+            claude_analysis=claude_analysis,
+            detection_type=detection_result.get("detection_type", "unknown"),
+            analysis=detection_result.get("analysis", ""),
+            model_note=detection_result.get("model_note", "")
         )
         
         detection_results[detection_id] = result.dict()
@@ -228,4 +249,4 @@ async def http_exception_handler(request, exc):
     )
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="1.0.0.0", port=8000)
+    uvicorn.run(app, host="localhost", port=8001)

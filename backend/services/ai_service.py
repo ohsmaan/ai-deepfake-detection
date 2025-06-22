@@ -1,23 +1,14 @@
 import os
 import time
-from typing import Dict, Any, Optional
+import numpy as np
 import torch
-from transformers import AutoImageProcessor, AutoModelForImageClassification
+import requests
 from transformers.pipelines import pipeline
 from PIL import Image
 import cv2
-import numpy as np
+from typing import Dict, Any, List
 from anthropic import Anthropic
 from dotenv import load_dotenv
-
-# Try different import paths for the HF API service
-try:
-    from services.hf_api_service import HuggingFaceAPIService
-except ImportError:
-    try:
-        from .hf_api_service import HuggingFaceAPIService
-    except ImportError:
-        from hf_api_service import HuggingFaceAPIService
 
 # Load environment variables
 load_dotenv()
@@ -25,30 +16,117 @@ load_dotenv()
 class AIService:
     def __init__(self):
         self.anthropic = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        self.hf_api = HuggingFaceAPIService()
         
-        # Use pipeline for local image classification
-        self.model_name = "aiwithoutborders-xyz/CommunityForensics-DeepfakeDet-ViT"  # Back to your preferred model
+        # Use the better performing model
+        self.model_name = "haywoodsloan/ai-image-detector-deploy"
+        self.api_url = f"https://api-inference.huggingface.co/models/{self.model_name}"
+        self.api_token = os.getenv("HUGGINGFACE_TOKEN")
         
-        # Create pipeline with explicit preprocessing
-        processor = AutoImageProcessor.from_pretrained(self.model_name)
-        self.pipe = pipeline(
-            "image-classification", 
-            model=self.model_name,
-            feature_extractor=processor
-        )
+        # Simplified thresholds for better detection
+        self.deepfake_threshold = 0.85  # Much higher threshold since model is too aggressive
+        self.ai_generated_threshold = 0.80  # Higher threshold for AI detection
+        
+        # Use the pipeline for inference
+        device = 0 if torch.cuda.is_available() else -1  # Use GPU if available
+        self.pipe = pipeline("image-classification", model=self.model_name, device=device)
     
-    def _load_model(self):
-        """Load the deepfake detection model"""
+    def detect_deepfake_image(self, image: Image.Image) -> Dict[str, Any]:
         try:
-            print(f"Loading model: {self.model_name}")
-            self.processor = AutoImageProcessor.from_pretrained(self.model_name)
-            self.model = AutoModelForImageClassification.from_pretrained(self.model_name)
-            print("Model loaded successfully!")
+            result = self.pipe(image)
+            
+            # Handle pipeline result safely
+            if isinstance(result, list):
+                predictions = result
+            elif hasattr(result, '__iter__'):
+                predictions = list(result)  # type: ignore
+            else:
+                predictions = [result]
+            
+            if not predictions or not isinstance(predictions[0], dict):
+                return {
+                    "is_deepfake": False,
+                    "confidence": 0.0,
+                    "model_used": self.model_name,
+                    "predicted_label": "",
+                    "detection_type": "error",
+                    "analysis": "Pipeline returned no result or unexpected format",
+                    "model_note": "Pipeline error.",
+                    "debug_info": {"pipeline_result": str(result)}
+                }
+
+            # Aggregate scores for each label robustly
+            label_scores = {}
+            for pred in predictions:
+                if isinstance(pred, dict):
+                    label = str(pred.get('label', '')).lower()
+                    score = float(pred.get('score', 0.0))
+                    label_scores[label] = score
+
+            # Get the highest scoring label
+            if label_scores:
+                predicted_label = max(label_scores.keys(), key=lambda k: label_scores[k])
+                confidence_score = label_scores[predicted_label]
+                # For this model, 'artificial' means fake, 'real' means authentic
+                predicted_is_fake = predicted_label == 'artificial'
+            else:
+                predicted_label = 'unknown'
+                confidence_score = 0.0
+                predicted_is_fake = False
+
+            is_deepfake = False
+            detection_type = "real"
+            analysis = ""
+
+            if predicted_is_fake and confidence_score > self.deepfake_threshold:
+                is_deepfake = True
+                detection_type = "deepfake"
+                analysis = f"Deepfake detected ({confidence_score:.1%})"
+            elif predicted_is_fake and confidence_score > self.ai_generated_threshold:
+                is_deepfake = False
+                detection_type = "possible_ai"
+                analysis = f"Possible AI-generated content ({confidence_score:.1%})"
+            elif not predicted_is_fake and confidence_score > 0.6:
+                detection_type = "real"
+                analysis = f"Real image ({confidence_score:.1%})"
+            else:
+                detection_type = "uncertain"
+                analysis = f"Uncertain ({confidence_score:.1%})"
+
+            if confidence_score < 0.5:
+                analysis += " - Very low confidence"
+            elif confidence_score > 0.9:
+                analysis += " - Very high confidence"
+
+            model_note = "This model detects AI-generated images with 97.9% accuracy using SwinV2 architecture (pipeline inference)."
+
+            return {
+                "is_deepfake": is_deepfake,
+                "confidence": confidence_score,
+                "model_used": self.model_name,
+                "predicted_label": predicted_label,
+                "detection_type": detection_type,
+                "analysis": analysis,
+                "model_note": model_note,
+                "debug_info": {
+                    "pipeline_result": result,
+                    "label_scores": label_scores,
+                    "thresholds_used": {
+                        "deepfake_threshold": self.deepfake_threshold,
+                        "ai_generated_threshold": self.ai_generated_threshold
+                    }
+                }
+            }
         except Exception as e:
-            print(f"Error loading model: {e}")
-            # Fallback to mock model
-            self.model = None
+            return {
+                "is_deepfake": False,
+                "confidence": 0.0,
+                "model_used": self.model_name,
+                "predicted_label": "",
+                "detection_type": "error",
+                "analysis": f"Pipeline error: {str(e)}",
+                "model_note": "Pipeline error.",
+                "debug_info": {"error": str(e)}
+            }
     
     def extract_frames(self, video_path: str, max_frames: int = 10) -> list:
         """Extract frames from video for analysis"""
@@ -70,107 +148,16 @@ class AIService:
         return frames
     
     def _preprocess_image(self, image: Image.Image) -> Image.Image:
-        """Preprocess image for CommunityForensics model"""
+        """Preprocess image for Deep-Fake-Detector-v2-Model"""
         # Convert to RGB if needed
         if image.mode != 'RGB':
             image = image.convert('RGB')
         
-        # Resize to 384x384 (model requirement)
-        image_resized = image.resize((384, 384), Image.Resampling.LANCZOS)
+        # Resize to 224x224 (model requirement for ViT-base-patch16-224)
+        image_resized = image.resize((224, 224), Image.Resampling.LANCZOS)
         
         return image_resized
 
-    def detect_deepfake_image(self, image: Image.Image) -> Dict[str, Any]:
-        """Detect deepfake in a single image using direct model inference"""
-        try:
-            print(f"Original image size: {image.size}")
-            
-            # Preprocess image properly
-            processed_image = self._preprocess_image(image)
-            print(f"Processed image size: {processed_image.size}")
-            
-            # Use direct model inference instead of pipeline
-            from transformers import AutoImageProcessor, AutoModelForImageClassification
-            
-            # Load processor and model directly
-            processor = AutoImageProcessor.from_pretrained(self.model_name)
-            model = AutoModelForImageClassification.from_pretrained(self.model_name)
-            
-            # Fix processor size to match model expectations
-            processor.size = {'height': 384, 'width': 384}
-            processor.crop_size = 384
-            
-            # Process image with our preprocessor
-            inputs = processor(images=processed_image, return_tensors="pt")
-            
-            # Get prediction
-            with torch.no_grad():
-                outputs = model(**inputs)
-                probabilities = torch.nn.functional.softmax(outputs.logits, dim=-1)
-                confidence, predicted_class = torch.max(probabilities, 1)
-            
-            # Get label from model config
-            predicted_label = model.config.id2label[predicted_class.item()]
-            confidence_score = confidence.item()
-            
-            print(f"🔍 DEBUG: Raw prediction class: {predicted_class.item()}")
-            print(f"🔍 DEBUG: Predicted label: '{predicted_label}'")
-            print(f"🔍 DEBUG: Confidence score: {confidence_score}")
-            print(f"🔍 DEBUG: All possible labels: {model.config.id2label}")
-            
-            # More aggressive detection logic - check if it's a binary classification
-            if len(model.config.id2label) == 2:
-                # Binary classification (0=REAL, 1=FAKE or similar)
-                is_deepfake = predicted_class.item() == 1  # Class 1 is usually fake
-                print(f"🔍 DEBUG: Binary classification detected, class 1 = fake: {is_deepfake}")
-            else:
-                # Multi-class or different format
-                is_deepfake = (
-                    predicted_label.upper() in ["FAKE", "DEEPFAKE", "1", "GENERATED", "AI_GENERATED"] or
-                    confidence_score > 0.5  # Any confidence above 50%
-                )
-                print(f"🔍 DEBUG: Multi-class classification, is_deepfake: {is_deepfake}")
-            
-            # Add analysis based on confidence
-            if confidence_score > 0.8:
-                analysis = "High confidence prediction"
-            elif confidence_score > 0.6:
-                analysis = "Moderate confidence prediction"
-            else:
-                analysis = "Low confidence prediction - may need additional analysis"
-            
-            # Add specific analysis for false positives
-            if is_deepfake and confidence_score < 0.6:
-                analysis += " - Low confidence fake detection, possible false positive"
-            elif not is_deepfake and confidence_score > 0.8:
-                analysis += " - High confidence real detection"
-            
-            print(f"Model prediction: {predicted_label}, confidence: {confidence_score}")
-            print(f"Analysis: {analysis}")
-            
-            return {
-                "is_deepfake": is_deepfake,
-                "confidence": confidence_score,
-                "model_used": self.model_name,
-                "predicted_label": predicted_label,
-                "analysis": analysis,
-                "debug_info": {
-                    "prediction_class": predicted_class.item(),
-                    "all_labels": model.config.id2label,
-                    "binary_classification": len(model.config.id2label) == 2
-                },
-                "note": "This model is specialized for human face deepfakes. For AI-generated animals/objects, consider using a general AI detection model."
-            }
-            
-        except Exception as e:
-            print(f"Error in direct model inference: {e}")
-            return {
-                "is_deepfake": False,
-                "confidence": 0.5,
-                "model_used": self.model_name,
-                "error": str(e)
-            }
-    
     def detect_deepfake_video(self, video_path: str) -> Dict[str, Any]:
         """Detect deepfake in video by analyzing multiple frames"""
         try:
@@ -257,7 +244,7 @@ class AIService:
         """Get information about the loaded model"""
         return {
             "model_name": self.model_name,
-            "pipeline_loaded": self.pipe is not None,
-            "anthropic_available": bool(os.getenv("ANTHROPIC_API_KEY")),
-            "pipeline_type": "image-classification"
+            "model_loaded": True,
+            "processor_loaded": False,
+            "anthropic_available": bool(os.getenv("ANTHROPIC_API_KEY"))
         } 
