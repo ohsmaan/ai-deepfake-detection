@@ -162,24 +162,23 @@ class DeepfakeDetectorContent {
             });
         });
         
-        // More aggressive monitoring for Twitter
-        const config = {
+        // Fix the observer options - remove attributeFilter when attributes is false
+        const observerOptions = {
             childList: true,
             subtree: true,
-            attributes: isTwitter, // Watch for attribute changes on Twitter
-            attributeFilter: isTwitter ? ['src', 'style', 'class'] : []
+            attributes: false  // Set to false since we don't need attribute changes
         };
         
-        this.observer.observe(document.body, config);
+        this.observer.observe(document.body, observerOptions);
         
         // For Twitter, also set up periodic scanning
         if (isTwitter) {
             this.twitterScanInterval = setInterval(() => {
                 this.scanExistingContent();
-            }, 3000); // Scan every 3 seconds on Twitter
+            }, 3000); // Scan every 3 seconds
         }
         
-        console.log(`🔍 Content monitoring started${isTwitter ? ' (Twitter mode)' : ''}`);
+        console.log('🔍 Content monitoring started');
     }
 
     stopContentMonitoring() {
@@ -275,6 +274,13 @@ class DeepfakeDetectorContent {
             
             // Handle different detection types with lower thresholds for testing
             if (this.filterMode) {
+                console.log(`🔧 Filter mode is ON, checking detection result:`, {
+                    is_deepfake: result.is_deepfake,
+                    detection_type: result.detection_type,
+                    confidence: result.confidence,
+                    predicted_label: result.predicted_label
+                });
+                
                 if (result.is_deepfake) {
                     console.log(`🚫 Hiding deepfake image (${Math.round(result.confidence * 100)}%)`);
                     this.hideContent(img, 'image', result);
@@ -353,13 +359,23 @@ class DeepfakeDetectorContent {
             existingOverlay.remove();
         }
         
+        // Debug: Log the current settings
+        console.log(`🔧 hideContent called with:`, {
+            removeContent: this.removeContent,
+            filterMode: this.filterMode,
+            type: type,
+            result: result
+        });
+        
         // If removeContent is enabled, completely remove the element
         if (this.removeContent) {
+            console.log(`🗑️ Removing content (removeContent is enabled)`);
             this.removeElement(element, type, result);
             return;
         }
         
         // Otherwise, create overlay
+        console.log(`🚫 Creating overlay (removeContent is disabled)`);
         this.createOverlay(element, type, result);
     }
 
@@ -379,13 +395,137 @@ class DeepfakeDetectorContent {
         }
         this.removedElements.push(removedInfo);
         
-        // Remove the element
-        element.remove();
+        // Website-specific removal logic
+        const hostname = window.location.hostname;
+        
+        if (hostname.includes('youtube.com')) {
+            // For YouTube, remove the entire video card/container
+            this.removeYouTubeVideoCard(element);
+        } else if (hostname.includes('twitter.com') || hostname.includes('x.com')) {
+            // For Twitter, remove the entire post/tweet
+            this.removeTwitterPost(element);
+        } else {
+            // For other sites, just remove the element
+            element.remove();
+        }
         
         // Update filter count
         this.updateFilterCount();
         
         console.log(`🗑️ Removed ${type}: ${result.detection_type} content (${Math.round(result.confidence * 100)}%)`);
+    }
+
+    removeYouTubeVideoCard(element) {
+        console.log(`🎥 Attempting to remove YouTube video card`);
+        
+        // Look for YouTube-specific containers
+        const youtubeSelectors = [
+            'ytd-video-renderer',
+            'ytd-rich-item-renderer', 
+            'ytd-compact-video-renderer',
+            'ytd-grid-video-renderer',
+            'ytd-video-card-renderer',
+            '[id*="video-renderer"]',
+            '[id*="rich-item-renderer"]'
+        ];
+        
+        let container = null;
+        
+        // Try to find the YouTube container
+        for (const selector of youtubeSelectors) {
+            container = element.closest(selector);
+            if (container) {
+                console.log(`🎥 Found YouTube container: ${selector}`);
+                break;
+            }
+        }
+        
+        // If no specific container found, try to find a reasonable parent
+        if (!container) {
+            // Look for common YouTube parent patterns
+            let current = element;
+            for (let i = 0; i < 5; i++) { // Go up 5 levels max
+                current = current.parentElement;
+                if (!current) break;
+                
+                // Check if this looks like a video container
+                if (current.tagName === 'YTD-VIDEO-RENDERER' || 
+                    current.tagName === 'YTD-RICH-ITEM-RENDERER' ||
+                    current.classList.contains('ytd-video-renderer') ||
+                    current.id && current.id.includes('video') ||
+                    current.querySelector('ytd-thumbnail') ||
+                    current.querySelector('[id*="video"]')) {
+                    container = current;
+                    console.log(`🎥 Found YouTube container by pattern: ${current.tagName}`);
+                    break;
+                }
+            }
+        }
+        
+        // Remove the container if found, otherwise just remove the element
+        if (container) {
+            container.remove();
+            console.log(`🗑️ Removed YouTube video card container`);
+        } else {
+            element.remove();
+            console.log(`🗑️ Removed individual YouTube element (no container found)`);
+        }
+    }
+
+    removeTwitterPost(element) {
+        console.log(`🐦 Attempting to remove Twitter post`);
+        
+        // Look for Twitter-specific containers
+        const twitterSelectors = [
+            '[data-testid="tweet"]',
+            '[data-testid="cellInnerDiv"]',
+            'article[data-testid="tweet"]',
+            '[role="article"]',
+            '.css-1dbjc4n.r-1loqt21.r-18u37iz.r-1ny4l3l',
+            '[data-testid="tweetText"]',
+            '.tweet'
+        ];
+        
+        let container = null;
+        
+        // Try to find the Twitter container
+        for (const selector of twitterSelectors) {
+            container = element.closest(selector);
+            if (container) {
+                console.log(`🐦 Found Twitter container: ${selector}`);
+                break;
+            }
+        }
+        
+        // If no specific container found, try to find a reasonable parent
+        if (!container) {
+            // Look for common Twitter parent patterns
+            let current = element;
+            for (let i = 0; i < 5; i++) { // Go up 5 levels max
+                current = current.parentElement;
+                if (!current) break;
+                
+                // Check if this looks like a tweet container
+                if (current.getAttribute('data-testid') === 'tweet' ||
+                    current.getAttribute('role') === 'article' ||
+                    current.classList.contains('tweet') ||
+                    current.querySelector('[data-testid="tweetText"]') ||
+                    current.querySelector('[data-testid="tweet"]')) {
+                    container = current;
+                    console.log(`🐦 Found Twitter container by pattern: ${current.tagName}`);
+                    break;
+                }
+            }
+        }
+        
+        // Remove the container if found, otherwise just remove the element
+        if (container) {
+            container.remove();
+            console.log(`🗑️ Removed Twitter post container`);
+        } else {
+            element.remove();
+            console.log(`🗑️ Removed individual Twitter element (no container found)`);
+        }
     }
 
     createOverlay(element, type, result) {
@@ -859,20 +999,27 @@ class DeepfakeDetectorContent {
     }
 
     showVideoAnalysisButton(video) {
-        // Remove existing button if any
-        const existingButton = video.parentElement.querySelector('.deepfake-video-btn');
+        // Remove any existing analysis button
+        const existingButton = video.parentElement?.querySelector('.video-analysis-btn');
         if (existingButton) {
             existingButton.remove();
         }
-
+        
+        // Only add button if parent element exists
+        if (!video.parentElement) {
+            console.log('⚠️ No parent element found for video, skipping analysis button');
+            return;
+        }
+        
         // Create analysis button
         const button = document.createElement('button');
-        button.className = 'deepfake-video-btn';
+        button.className = 'video-analysis-btn';
         button.innerHTML = '🔍 Analyze Video';
         button.style.cssText = `
             position: absolute;
             top: 10px;
             right: 10px;
+            z-index: 1000;
             background: rgba(0, 0, 0, 0.8);
             color: white;
             border: none;
@@ -880,31 +1027,20 @@ class DeepfakeDetectorContent {
             border-radius: 4px;
             cursor: pointer;
             font-size: 12px;
-            z-index: 1000;
-            transition: background 0.2s;
+            font-family: Arial, sans-serif;
         `;
-
-        button.addEventListener('mouseenter', () => {
-            button.style.background = 'rgba(0, 0, 0, 0.9)';
-        });
-
-        button.addEventListener('mouseleave', () => {
-            button.style.background = 'rgba(0, 0, 0, 0.8)';
-        });
-
+        
         button.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
             this.analyzeVideo(video);
         });
-
-        // Position the video container relatively if needed
-        const container = video.parentElement;
-        if (getComputedStyle(container).position === 'static') {
-            container.style.position = 'relative';
-        }
-
-        container.appendChild(button);
+        
+        // Add button to video container
+        video.parentElement.style.position = 'relative';
+        video.parentElement.appendChild(button);
+        
+        console.log('🎥 Added video analysis button');
     }
 
     detectVideos() {

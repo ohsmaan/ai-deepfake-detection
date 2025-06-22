@@ -184,9 +184,7 @@ async def upload_file(
                     image_buffer = io.BytesIO(image_data)
                     print(f"🔄 Created BytesIO buffer")
                     
-                    # Check if pillow-avif is working
-                    print(f"🔍 Available image formats: {Image.OPEN}")
-                    
+                    # Load image directly from BytesIO
                     image = Image.open(image_buffer)
                     print(f"🖼️ AVIF image loaded: {image.size} {image.mode}")
                     
@@ -199,7 +197,20 @@ async def upload_file(
                 except Exception as avif_error:
                     print(f"❌ AVIF processing error: {avif_error}")
                     print(f"❌ Error type: {type(avif_error)}")
-                    raise avif_error
+                    # Try alternative approach - save as proper AVIF file
+                    try:
+                        avif_temp_path = temp_file_path.replace('.jpg', '.avif')
+                        with open(avif_temp_path, 'wb') as f:
+                            f.write(image_data)
+                        print(f"🔄 Saved as proper AVIF file: {avif_temp_path}")
+                        image = Image.open(avif_temp_path)
+                        detection_result = ai_service.detect_deepfake_image(image)
+                        # Clean up AVIF temp file
+                        if os.path.exists(avif_temp_path):
+                            os.remove(avif_temp_path)
+                    except Exception as alt_error:
+                        print(f"❌ Alternative AVIF approach failed: {alt_error}")
+                        raise avif_error
             else:
                 # Double-check file exists before opening
                 if not os.path.exists(temp_file_path):
